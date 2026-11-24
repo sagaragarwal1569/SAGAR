@@ -820,10 +820,11 @@ details.settings .body { display: flex; flex-direction: column; gap: 14px; paddi
   }
 
   var API = 'https://generativelanguage.googleapis.com/v1beta/';
-  // Google retires models from time to time, so Sagar tries these in order and remembers the one that works.
+  // Google retires models and sometimes overloads them, so Sagar tries these in order
+  // and remembers the one that works. The steadier models come first.
   var CHAINS = {
-    fast: ['gemini-3.1-flash-lite', 'gemini-2.5-flash-lite', 'gemini-3.5-flash', 'gemini-2.5-flash'],
-    full: ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite']
+    fast: ['gemini-2.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-3.5-flash'],
+    full: ['gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.1-flash-lite']
   };
   function chainFor(tier) {
     if (store.model) return [store.model];
@@ -845,43 +846,67 @@ details.settings .body { display: flex; flex-direction: column; gap: 14px; paddi
     }
   }
 
-  async function callGemini(system, user, key, models, signal) {
-    var lastErr = null;
+  function sleep(ms, signal) {
+    return new Promise(function (resolve, reject) {
+      var t = setTimeout(resolve, ms);
+      if (signal) signal.addEventListener('abort', function () { clearTimeout(t); reject({ code: 'cancelled' }); }, { once: true });
+    });
+  }
+
+  // Busy (500, 502, 503, 504): wait a moment and retry once, then try the next model.
+  // Not found (404) or over the limit (429): the next model has its own limit, so try it.
+  // Anything else (a bad key, a bad request): another model will not help, so stop.
+  async function callGemini(system, user, key, models, signal, onNote) {
+    var lastErr = null, tried = [];
     for (var i = 0; i < models.length; i++) {
-      var res;
-      try {
-        res = await fetch(API + 'models/' + encodeURIComponent(models[i]) + ':generateContent', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-          body: JSON.stringify({
-            system_instruction: { parts: [{ text: system }] },
-            contents: [{ role: 'user', parts: [{ text: user }] }]
-          }),
-          signal: signal
-        });
-      } catch (e) {
-        if (e && e.name === 'AbortError') throw { code: 'cancelled' };
-        throw { code: 'network', message: String((e && e.message) || e) };
-      }
-      var data = null;
-      try { data = await res.json(); } catch (e) { data = null; }
-      if (res.ok) {
-        var cand = data && data.candidates && data.candidates[0];
-        var parts = (cand && cand.content && cand.content.parts) || [];
-        var text = parts.filter(function (p) { return p && !p.thought && typeof p.text === 'string'; })
-          .map(function (p) { return p.text; }).join('').trim();
-        if (!text) {
-          var blocked = data && data.promptFeedback && data.promptFeedback.blockReason;
-          throw { code: blocked ? 'blocked' : 'empty' };
+      tried.push(models[i]);
+      var attempts = i === 0 ? 2 : 1;
+      for (var attempt = 0; attempt < attempts; attempt++) {
+        var res;
+        try {
+          res = await fetch(API + 'models/' + encodeURIComponent(models[i]) + ':generateContent', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+            body: JSON.stringify({
+              system_instruction: { parts: [{ text: system }] },
+              contents: [{ role: 'user', parts: [{ text: user }] }]
+            }),
+            signal: signal
+          });
+        } catch (e) {
+          if (e && e.name === 'AbortError') throw { code: 'cancelled' };
+          throw { code: 'network', message: String((e && e.message) || e) };
         }
-        return { text: text, model: models[i], truncated: !!(cand && cand.finishReason === 'MAX_TOKENS') };
+        var data = null;
+        try { data = await res.json(); } catch (e) { data = null; }
+        if (res.ok) {
+          var cand = data && data.candidates && data.candidates[0];
+          var parts = (cand && cand.content && cand.content.parts) || [];
+          var text = parts.filter(function (p) { return p && !p.thought && typeof p.text === 'string'; })
+            .map(function (p) { return p.text; }).join('').trim();
+          if (!text) {
+            var blocked = data && data.promptFeedback && data.promptFeedback.blockReason;
+            throw { code: blocked ? 'blocked' : 'empty' };
+          }
+          return { text: text, model: models[i], truncated: !!(cand && cand.finishReason === 'MAX_TOKENS') };
+        }
+        var err = (data && data.error) || {};
+        lastErr = { code: 'http', status: res.status, apiStatus: err.status || '', message: String(err.message || ''), tried: tried.slice() };
+        var st = res.status;
+        if (st === 500 || st === 502 || st === 503 || st === 504) {
+          if (attempt + 1 < attempts) {
+            if (onNote) onNote('Google is busy. Trying again…');
+            await sleep(1500, signal);
+            continue;
+          }
+          break;
+        }
+        if (st === 404 || st === 429) break;
+        throw lastErr;
       }
-      var err = (data && data.error) || {};
-      var info = { code: 'http', status: res.status, apiStatus: err.status || '', message: String(err.message || '') };
-      if (res.status === 404 && i < models.length - 1) { lastErr = info; continue; }
-      throw info;
+      if (i + 1 < models.length && onNote) onNote('Trying another Gemini model…');
     }
-    throw lastErr || { code: 'http', status: 404, apiStatus: '', message: '' };
+    throw lastErr || { code: 'http', status: 404, apiStatus: '', message: '', tried: tried };
   }
 
   function buildPrompt(mode, text, target, subject) {
@@ -961,7 +986,10 @@ details.settings .body { display: flex; flex-direction: column; gap: 14px; paddi
         : 'Sagar could not find a Gemini model to use. Open Key and settings and type a current model name.' };
     }
     if (s === 429) return { text: 'The free limit is used up for now. Wait a minute and try again. If it keeps happening, try again tomorrow.' };
-    if (s >= 500) return { text: 'Google is busy right now. Try again in a moment.' };
+    if (s >= 500) {
+      var tried = e.tried && e.tried.length ? ' Sagar tried ' + e.tried.join(', ') + '.' : '';
+      return { text: 'Google is busy right now (error ' + s + ').' + tried + ' Wait a minute, then press the button again.' + (google ? ' Google says: ' + google : '') };
+    }
     return { text: 'Something went wrong' + (s ? ' (error ' + s + ')' : '') + '.' + (google ? ' Google says: ' + google : '') };
   }
 
@@ -988,7 +1016,9 @@ details.settings .body { display: flex; flex-direction: column; gap: 14px; paddi
     setBusy(true);
     try {
       var p = buildPrompt(mode, raw.slice(0, 8000), target, subject);
-      var res = await callGemini(p.system, p.user, store.key, chainFor(cfg.tier), ctl.signal);
+      var res = await callGemini(p.system, p.user, store.key, chainFor(cfg.tier), ctl.signal, function (m) {
+        if (ctl) out.textContent = m;
+      });
       setOut(res.text);
       if (!store.model && store.ok[cfg.tier] !== res.model) { store.ok[cfg.tier] = res.model; save(); }
       if (res.truncated) setNotice('The answer was cut short. Try asking for less at a time.', 'info');
