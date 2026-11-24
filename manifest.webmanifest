@@ -1,0 +1,22 @@
+{
+  "name": "Sagar",
+  "short_name": "Sagar",
+  "description": "Say it your way. Sagar makes it clear.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#F2F6F6",
+  "theme_color": "#0B5D6B",
+  "icons": [
+    {
+      "src": "logo/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "logo/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
