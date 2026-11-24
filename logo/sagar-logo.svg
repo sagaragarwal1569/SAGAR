@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512" role="img" aria-label="Sagar logo">
+  <defs><clipPath id="t"><rect width="64" height="64" rx="16"/></clipPath></defs>
+  <g clip-path="url(#t)">
+    <rect width="64" height="64" fill="#0B5D6B"/>
+    <circle cx="32" cy="30" r="11" fill="#F2A23C"/>
+    <path d="M-8 38 q8 -6 16 0 t16 0 t16 0 t16 0 t16 0 V64 H-8 Z" fill="#0B5D6B"/>
+    <g fill="none" stroke="#FFFFFF" stroke-width="2.6" stroke-linecap="round">
+      <path d="M-8 38 q8 -6 16 0 t16 0 t16 0 t16 0 t16 0"/>
+      <path d="M-8 47 q8 -6 16 0 t16 0 t16 0 t16 0 t16 0" opacity="0.75"/>
+      <path d="M-8 56 q8 -6 16 0 t16 0 t16 0 t16 0 t16 0" opacity="0.5"/>
+    </g>
+  </g>
+</svg>
